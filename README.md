@@ -1,2 +1,1 @@
-# spatial-ml-project
-Spatial Machine Learning final project — WNE UW 2026
+# Spatial Machine Learning final project — WNE UW 2026
