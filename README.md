@@ -14,45 +14,36 @@ Predicting ground-level air pollution concentrations across Poland using satelli
 |--------|------|-----------|--------|
 | Sentinel-5P TROPOMI | NO₂, SO₂, CO atmospheric columns | ~5.5km, daily | Google Earth Engine / Copernicus |
 | GIOŚ | Ground-level NO₂, SO₂, PM10, PM2.5, CO, O₃ | ~250 stations, hourly | REST API / bulk CSV |
-| GUS BDL | Population, vehicles, industry stats | Gmina level | REST API / `bdl` package |
+| GUS BDL | Population, vehicles, industry stats | Gmina level | REST API |
 | OpenStreetMap | Roads, railways, industrial areas, power plants | Vector features | `osmdata` package |
-| ERA5 (optional) | Wind, temperature, boundary layer height | 0.25°, hourly | `ecmwfr` / GEE |
 
 ## Repository Structure
 
 ```
-├── 00_setup.R              # Package installation & project config
-├── 01_collect_tropomi.R    # Sentinel-5P data via Google Earth Engine
-├── 02_collect_gios.R       # GIOŚ ground station data via API
-├── 03_collect_gus.R        # GUS BDL demographic data
-├── 04_collect_osm.R        # OpenStreetMap spatial features
-├── 05_build_grid.R         # Grid creation & data integration
-├── 06_eda.R                # Exploratory data analysis & visualization
-├── 07_supervised_ml.R      # RF, GW-RF, ANN models
-├── 08_unsupervised_ml.R    # Clustering, agglomeration, LISA
-├── 09_kriging.R            # Ordinary, Universal & Regression Kriging
-├── 10_utils.R              # Shared helper functions & themes
-├── 11_report.Rmd           # Final RPubs report (sources all scripts)
+├── 00_setup.R            # Packages, config, helpers
+├── 01_collect_data.R     # ALL data collection (TROPOMI, GIOŚ, GUS, OSM)
+├── 02_build_grid.R       # 5km grid + data integration
+├── 03_analysis.R         # EDA + supervised ML + unsupervised ML + kriging
+├── 04_report.Rmd         # Final RPubs report
 ├── data/
-│   ├── raw/                # Downloaded source data
-│   ├── processed/          # Cleaned & integrated datasets
-│   └── output/             # Final analysis outputs
-├── figures/                # Maps and plots
+│   ├── raw/              # Downloaded source data
+│   ├── processed/        # Cleaned & integrated datasets
+│   └── output/           # Final results (predictions, comparisons)
+├── figures/              # Maps and plots
 └── README.md
 ```
 
 ## Workflow
 
-Run scripts **in order** (00 → 05 for data, 06 → 09 for analysis). The report `11_report.Rmd` sources the analysis scripts and knits to HTML for RPubs publication.
-
 ```
-00_setup → 01-04 (parallel data collection) → 05_build_grid → 06_eda →
-→ 07_supervised_ml → 08_unsupervised_ml → 09_kriging → 11_report.Rmd → RPubs
+00_setup  →  01_collect_data  →  02_build_grid  →  03_analysis  →  04_report.Rmd  →  RPubs
 ```
 
-## Methods (planned)
+Each script in `01` and `03` is organized into **independently runnable sections** — uncomment the function calls you need. This lets you work incrementally as data becomes available.
 
-- **Supervised ML:** Random Forest, Geographically Weighted RF, ANN, CNN
-- **Unsupervised ML:** Spatial clustering (pollution hotspots), agglomeration measurement, spatial distribution comparison
-- **Geostatistics:** Kriging for surface interpolation
-- **Spatial analysis:** Spatial weight matrices, spatial autocorrelation (Moran's I)
+## Methods
+
+- **Supervised ML:** Random Forest, Geographically Weighted RF, ANN
+- **Unsupervised ML:** DBSCAN hotspot clustering, LISA (Local Moran's I), PAM spatial typology
+- **Geostatistics:** Ordinary Kriging, Universal Kriging, Regression Kriging
+- **Spatial analysis:** Spatial weight matrices, Moran's I, variogram analysis

@@ -5,67 +5,95 @@
 # =============================================================================
 
 # --- 1. Install required packages -------------------------------------------
+# We avoid loading packages here to prevent side effects (e.g. terra
+# overriding base::c). Each script loads only what it needs.
 
-required_packages <- c(
-  # Spatial core
+# CORE packages (from CRAN) — needed for data collection & basic analysis
+core_packages <- base::c(
   "sf", "terra", "stars",
-  # Google Earth Engine
-  "rgee", "reticulate",
-  # Data APIs
-  "httr2", "jsonlite",
-  # OSM data
-  "osmdata",
-  # Data wrangling
+  "httr2", "jsonlite", "osmdata",
   "tidyverse", "lubridate", "glue",
-  # Spatial analysis (will need later)
-  "spdep", "spatialreg", "ranger", "caret",
-  # Visualization
-  "ggplot2", "tmap", "viridis"
+  "viridis", "corrplot"
 )
 
-install_if_missing <- function(pkg) {
+# ANALYSIS packages (from CRAN) — needed for modelling & kriging
+analysis_packages <- base::c(
+  "spdep", "spatialreg", "ranger", "caret", "nnet",
+  "gstat", "automap",
+  "dbscan", "cluster",
+  "rgee", "reticulate"
+)
+
+install_pkg <- function(pkg) {
+  if (requireNamespace(pkg, quietly = TRUE)) return(invisible(TRUE))
+  message(paste0("Installing ", pkg, "..."))
+  tryCatch(
+    utils::install.packages(pkg, dependencies = TRUE),
+    warning = function(w) message(paste0("  WARNING: ", w$message)),
+    error   = function(e) message(paste0("  FAILED: ", e$message))
+  )
+  # Check if it actually installed
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    message(paste0("Installing ", pkg, "..."))
-    install.packages(pkg, dependencies = TRUE)
+    message(paste0("  >>> ", pkg, " not available. Install manually or skip."))
   }
 }
 
-invisible(lapply(required_packages, install_if_missing))
+message("--- Installing core packages ---")
+for (pkg in core_packages) install_pkg(pkg)
 
-# bdl package (GUS BDL API wrapper) — install separately if needed:
-# install.packages("bdl")
-# If not on CRAN for your R version, the API can be called directly via httr2
-# (see 03_collect_gus.R for both approaches)
+message("\n--- Installing analysis packages ---")
+for (pkg in analysis_packages) install_pkg(pkg)
+
+# SPECIAL INSTALLS (not on CRAN for all R versions):
+#
+# SpatialML (geographically weighted random forest):
+#   install.packages("remotes")
+#   remotes::install_github("SpatialML/SpatialML")
+#
+# tmap (optional, for interactive maps — has many dependencies):
+#   install.packages("tmap")
+#
+# If terra fails due to network, retry:
+#   install.packages("terra", repos = "https://cran.rstudio.com/")
+
+# Quick status check
+installed <- sapply(base::c(core_packages, analysis_packages), function(p) {
+  requireNamespace(p, quietly = TRUE)
+})
+n_ok <- sum(installed)
+n_fail <- sum(!installed)
+message(paste0("\nPackage status: ", n_ok, " installed, ", n_fail, " missing"))
+if (n_fail > 0) {
+  message("Missing: ", paste(names(installed[!installed]), collapse = ", "))
+  message("Some may be optional. Re-run or install manually as needed.")
+}
 
 # --- 2. Project configuration -----------------------------------------------
 
-# All paths relative to project root
-CONFIG <- list(
+CONFIG <- base::list(
   # CRS
-  crs_pl     = 2180,        # EPSG:2180 — Poland CS92 (metric, for spatial ops)
-  crs_wgs84  = 4326,        # EPSG:4326 — WGS84 (for API queries & GEE)
-  
-  # Temporal scope — pick a full calendar year for clean analysis
+  crs_pl    = 2180L,
+  crs_wgs84 = 4326L,
+
+  # Temporal scope
   date_start = "2024-01-01",
   date_end   = "2024-12-31",
-  
-  # Spatial scope — Poland bounding box (WGS84)
-  # NOTE: base::c() used explicitly because terra overrides c() after loading
-  bbox_poland = base::c(xmin = 14.07, ymin = 49.00, xmax = 24.15, ymax = 54.84),
-  
-  # Grid resolution (meters) — roughly matching TROPOMI pixel size
-  
-  grid_res = 5000,
-  
-  # Output directories
-  dir_raw    = "data/raw",
+
+  # Poland bounding box (WGS84) — using base::c explicitly
+  bbox = base::c(xmin = 14.07, ymin = 49.00, xmax = 24.15, ymax = 54.84),
+
+  # Grid resolution (meters)
+  grid_res = 5000L,
+
+  # Directories (relative to project root)
+  dir_raw       = "data/raw",
   dir_processed = "data/processed",
-  dir_output = "data/output",
-  dir_figures = "figures"
+  dir_output    = "data/output",
+  dir_figures   = "figures"
 )
 
-# Create directory structure
-dirs <- base::c(
+# Create directories
+for (d in base::c(
   CONFIG$dir_raw,
   file.path(CONFIG$dir_raw, "tropomi"),
   file.path(CONFIG$dir_raw, "gios"),
@@ -74,21 +102,44 @@ dirs <- base::c(
   CONFIG$dir_processed,
   CONFIG$dir_output,
   CONFIG$dir_figures
-)
-invisible(lapply(dirs, dir.create, recursive = TRUE, showWarnings = FALSE))
+)) {
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+}
 
-message("Setup complete. Directory structure created.")
-message("Temporal scope: ", CONFIG$date_start, " to ", CONFIG$date_end)
+# --- 3. Shared helper functions ----------------------------------------------
 
-# --- 3. Google Earth Engine initialization -----------------------------------
-# NOTE: First-time setup requires:
-#   1. A Google account with GEE access (signup: https://earthengine.google.com/)
-#   2. Python environment with 'earthengine-api' installed
+#' Safely read an sf file (returns NULL if missing)
+safe_read_sf <- function(path, ...) {
+  if (!file.exists(path)) { warning(paste0("Not found: ", path)); return(NULL) }
+  sf::st_read(path, quiet = TRUE, ...)
+}
+
+#' Safely read CSV (returns NULL if missing)
+safe_read_csv <- function(path, ...) {
+  if (!file.exists(path)) { warning(paste0("Not found: ", path)); return(NULL) }
+  readr::read_csv(path, show_col_types = FALSE, ...)
+}
+
+#' Regression accuracy metrics
+calc_metrics <- function(actual, predicted) {
+  ok <- !is.na(actual) & !is.na(predicted)
+  a <- actual[ok]; p <- predicted[ok]
+  if (length(a) < 3) return(NULL)
+  data.frame(
+    n = length(a), R2 = cor(a, p)^2,
+    RMSE = sqrt(mean((a - p)^2)),
+    MAE  = mean(abs(a - p))
+  )
+}
+
+message("Setup complete.")
+message("Year: ", format(as.Date(CONFIG$date_start), "%Y"))
+message("Grid: ", CONFIG$grid_res / 1000, " km")
+
+# =============================================================================
+# Google Earth Engine — one-time setup (run interactively):
+#   rgee::ee_install()
+#   rgee::ee_Initialize()
 #
-# Run once:
-#   rgee::ee_install()          # installs Python env
-#   rgee::ee_Initialize()       # authenticates with Google
-#
-# If you have issues with rgee, the fallback is downloading GeoTIFFs
-# from the S5P-PAL portal: https://maps.s5p-pal.com/no2/
+# If rgee doesn't work, use S5P-PAL portal: https://maps.s5p-pal.com/no2/
 # =============================================================================

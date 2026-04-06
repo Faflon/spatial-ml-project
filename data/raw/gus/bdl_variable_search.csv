@@ -1,0 +1,22 @@
+id,subjectId,n1,level,measureUnitName,search_term,n2,n3
+458238,P2425,gęstość zaludnienia powierzchni zabudowanej i zurbanizowanej (osoby/km2),6,osoba,gęstość zaludnienia,NA,NA
+10505,P1733,pojazdy samochodowe i ciągniki,5,szt.,pojazdy samochodowe,NA,NA
+32553,P1733,"pojazdy samochodowe, ciągniki rolnicze, motorowery ogółem",5,szt.,pojazdy samochodowe,NA,NA
+4689,P1750,ogółem,3,szt.,pojazdy samochodowe,pojazdy samochodowe i ciągniki,NA
+4705,P1750,pochodzące z importu ogółem,3,szt.,pojazdy samochodowe,pojazdy samochodowe i ciągniki,NA
+4721,P1750,pochodzące z importu nowe,3,szt.,pojazdy samochodowe,pojazdy samochodowe i ciągniki,NA
+454131,P2420,pojazdy samochodowe i ciągniki na 1000 ludności,5,szt.,pojazdy samochodowe,NA,NA
+1542341,P3860,styczeń,3,-,pojazdy samochodowe,"pojazdy samochodowe, motocykle, części",dynamika - miesiąc poprzedni = 100
+1542342,P3860,styczeń,3,-,pojazdy samochodowe,"pojazdy samochodowe, motocykle, części",dynamika - analogiczny miesiąc poprzedniego roku = 100
+1542361,P3860,luty,3,-,pojazdy samochodowe,"pojazdy samochodowe, motocykle, części",dynamika - miesiąc poprzedni = 100
+1542362,P3860,luty,3,-,pojazdy samochodowe,"pojazdy samochodowe, motocykle, części",dynamika - analogiczny miesiąc poprzedniego roku = 100
+1646066,P1408,powierzchnia lasów na 1 mieszkańca,6,ar,powierzchnia,NA,NA
+1610510,P1409,powierzchnia produkcyjna szkółek leśnych,3,ar,powierzchnia,ogółem,NA
+1610511,P1409,powierzchnia produkcyjna szkółek leśnych,3,ar,powierzchnia,lasy publiczne,NA
+1610512,P1409,powierzchnia produkcyjna szkółek leśnych,3,ar,powierzchnia,lasy publiczne Skarbu Państwa,NA
+1610513,P1409,powierzchnia produkcyjna szkółek leśnych,3,ar,powierzchnia,lasy publiczne Skarbu Państwa w zarządzie Lasów Państwowych,NA
+1610521,P1409,odnowienia sztuczne zrębów na powierzchniach otwartych i pod osłoną drzewostanów,3,ha,powierzchnia,ogółem,NA
+1610522,P1409,odnowienia sztuczne zrębów na powierzchniach otwartych i pod osłoną drzewostanów,3,ha,powierzchnia,lasy publiczne,NA
+1610523,P1409,odnowienia sztuczne zrębów na powierzchniach otwartych i pod osłoną drzewostanów,3,ha,powierzchnia,lasy publiczne Skarbu Państwa,NA
+1610524,P1409,odnowienia sztuczne zrębów na powierzchniach otwartych i pod osłoną drzewostanów,3,ha,powierzchnia,lasy publiczne Skarbu Państwa w zarządzie Lasów Państwowych,NA
+1610525,P1409,odnowienia sztuczne zrębów na powierzchniach otwartych i pod osłoną drzewostanów,3,ha,powierzchnia,lasy prywatne,NA

@@ -1,0 +1,285 @@
+---
+title: "Spatial Machine Learning for Air Pollution Modeling in Poland"
+subtitle: "Predicting Ground-Level NO₂ Using Sentinel-5P TROPOMI, Ground Stations & Spatial Features"
+author: "Ondřej Marvan & Adam Jaworski"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    fig_width: 10
+    fig_height: 7
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.align = "center", cache = TRUE
+)
+
+source("00_setup.R")
+
+library(sf)
+library(terra)
+library(tidyverse)
+library(spdep)
+library(ranger)
+library(gstat)
+library(automap)
+library(dbscan)
+library(cluster)
+library(viridis)
+library(corrplot)
+library(knitr)
+```
+
+# 1. Introduction
+
+Air pollution remains one of the most pressing public health challenges in
+Poland, with nitrogen dioxide (NO₂) concentrations regularly exceeding EU
+limits in major urban areas and along transport corridors. This study combines
+satellite-based atmospheric measurements from the **Sentinel-5P TROPOMI**
+instrument with ground-level observations from the **GIOŚ** national monitoring
+network to build spatial machine learning models predicting NO₂ concentrations
+across Poland at 5 km resolution.
+
+**Research questions:**
+
+1. How well can satellite-derived tropospheric NO₂ columns predict ground-level
+   concentrations?
+2. Which spatial features (road density, industrial land use, population)
+   improve prediction accuracy?
+3. Where are the persistent pollution hotspots, and what spatial patterns
+   emerge?
+4. Can kriging improve predictions by capturing residual spatial
+   autocorrelation?
+
+
+# 2. Data & Methods
+
+```{r load-data}
+grid     <- safe_read_sf(file.path(CONFIG$dir_processed, "analysis_grid.gpkg"))
+tropomi  <- safe_read_csv(file.path(CONFIG$dir_processed, "tropomi_grid.csv"))
+stations <- safe_read_sf(file.path(CONFIG$dir_processed, "stations_gridded.gpkg"))
+```
+
+## 2.1 Data Sources
+
+| Source | Content | Resolution | Access method |
+|--------|---------|-----------|---------------|
+| Sentinel-5P TROPOMI | NO₂, SO₂, CO columns | ~5.5 km, daily → monthly | Google Earth Engine (`rgee`) |
+| GIOŚ | Ground NO₂, SO₂, PM10, PM2.5, CO, O₃ | ~250 stations, hourly | REST API + bulk CSV |
+| GUS BDL | Population, vehicles, industry | Gmina level | REST API |
+| OpenStreetMap | Roads, railways, industrial zones | Vector | `osmdata` package |
+
+## 2.2 Analysis Grid
+
+We constructed a regular **`r CONFIG$grid_res / 1000` km** grid over Poland in
+EPSG:2180 (Poland CS92), clipped to the national boundary.
+Grid cells serve as the common spatial unit for integrating all data sources.
+
+```{r grid-summary}
+if (!is.null(grid)) {
+  cat(sprintf("Grid cells: %d\n", nrow(grid)))
+  cat(sprintf("Features: %s\n", paste(
+    setdiff(names(grid), base::c("geometry", "cell_id", "x_coord", "y_coord")),
+    collapse = ", "
+  )))
+}
+```
+
+
+# 3. Exploratory Data Analysis
+
+## 3.1 NO₂ Spatial Distribution
+
+```{r no2-map, fig.cap="Annual mean tropospheric NO₂ over Poland (TROPOMI)."}
+if (!is.null(grid) && "tropomi_no2" %in% names(grid)) {
+  ggplot(grid |> filter(!is.na(tropomi_no2))) +
+    geom_sf(aes(fill = tropomi_no2), color = NA) +
+    scale_fill_viridis(option = "inferno", name = expression(NO[2])) +
+    labs(title = "Annual Mean Tropospheric NO₂ — Poland",
+         subtitle = "Source: Sentinel-5P TROPOMI") +
+    theme_minimal()
+}
+```
+
+## 3.2 Monthly Temporal Patterns
+
+```{r monthly-ts, fig.cap="Monthly national average pollutant concentrations."}
+if (!is.null(tropomi)) {
+  tropomi |>
+    group_by(year_month, pollutant) |>
+    summarise(mean_val = mean(value, na.rm = TRUE),
+              sd_val   = sd(value, na.rm = TRUE), .groups = "drop") |>
+    ggplot(aes(x = year_month, y = mean_val)) +
+    geom_line(linewidth = 1, color = "steelblue") +
+    geom_ribbon(aes(ymin = mean_val - sd_val, ymax = mean_val + sd_val),
+                alpha = 0.2, fill = "steelblue") +
+    facet_wrap(~pollutant, scales = "free_y", ncol = 1) +
+    labs(x = NULL, y = "Column density (mol/m²)") +
+    theme_minimal()
+}
+```
+
+## 3.3 Feature Correlations
+
+```{r correlation, fig.cap="Correlation matrix of grid features."}
+if (!is.null(grid)) {
+  num_cols <- grid |>
+    st_drop_geometry() |>
+    select(where(is.numeric), -cell_id, -x_coord, -y_coord)
+
+  if (ncol(num_cols) >= 3) {
+    cor_mat <- cor(drop_na(num_cols))
+    corrplot(cor_mat, method = "color", type = "lower",
+             tl.cex = 0.7, addCoef.col = "black", number.cex = 0.6)
+  }
+}
+```
+
+## 3.4 Spatial Autocorrelation
+
+```{r moran}
+if (!is.null(grid) && "tropomi_no2" %in% names(grid)) {
+  clean <- grid |> filter(!is.na(tropomi_no2))
+  coords <- st_coordinates(st_centroid(clean))
+  nb <- knearneigh(coords, k = 8) |> knn2nb()
+  lw <- nb2listw(nb, style = "W")
+  moran_res <- moran.test(clean$tropomi_no2, lw)
+
+  cat(sprintf("Moran's I = %.4f (p = %s)\n",
+              moran_res$estimate[1], format.pval(moran_res$p.value)))
+  cat("Interpretation: strong positive spatial autocorrelation confirms that",
+      "NO₂ is spatially clustered, justifying spatial ML methods.\n")
+}
+```
+
+
+# 4. Supervised Machine Learning
+
+```{r supervised, results='hide'}
+# Source the analysis functions
+source("03_analysis.R")
+
+# Run supervised ML (uncomment when data is ready)
+# sup_results <- run_supervised()
+```
+
+## 4.1 Random Forest
+
+```{r rf-importance, fig.cap="Top 15 predictors by impurity-based importance."}
+imp_path <- file.path(CONFIG$dir_figures, "rf_importance.png")
+if (file.exists(imp_path)) knitr::include_graphics(imp_path)
+```
+
+## 4.2 Geographically Weighted Random Forest
+
+The GW-RF captures **spatial non-stationarity** — the idea that predictor
+effects vary across space (e.g., road density matters more in urban corridors
+than in rural eastern Poland).
+
+## 4.3 Model Comparison
+
+```{r model-comparison}
+comp_path <- file.path(CONFIG$dir_output, "model_comparison.csv")
+if (file.exists(comp_path)) {
+  read_csv(comp_path, show_col_types = FALSE) |> kable(digits = 4)
+}
+```
+
+
+# 5. Unsupervised Machine Learning
+
+## 5.1 Hotspot Detection (DBSCAN)
+
+```{r hotspots, fig.cap="DBSCAN clusters of top-quartile NO₂ grid cells."}
+hot_path <- file.path(CONFIG$dir_figures, "hotspots_dbscan.png")
+if (file.exists(hot_path)) knitr::include_graphics(hot_path)
+```
+
+## 5.2 LISA Cluster Map
+
+```{r lisa, fig.cap="Local Moran's I — High-High clusters mark persistent pollution zones."}
+lisa_path <- file.path(CONFIG$dir_figures, "lisa_no2.png")
+if (file.exists(lisa_path)) knitr::include_graphics(lisa_path)
+```
+
+## 5.3 Spatial Typology (PAM Clustering)
+
+```{r pam-clusters, fig.cap="Multi-variable spatial typology of Poland."}
+pam_path <- file.path(CONFIG$dir_figures, "spatial_clusters.png")
+if (file.exists(pam_path)) knitr::include_graphics(pam_path)
+```
+
+
+# 6. Kriging
+
+## 6.1 Variogram
+
+```{r variogram, fig.cap="Fitted semivariogram of ground-level NO₂."}
+var_path <- file.path(CONFIG$dir_figures, "variogram.png")
+if (file.exists(var_path)) knitr::include_graphics(var_path)
+```
+
+## 6.2 Interpolated Surface
+
+```{r kriging-map, fig.cap="Ordinary Kriging prediction surface."}
+ok_path <- file.path(CONFIG$dir_figures, "kriging_ok.png")
+if (file.exists(ok_path)) knitr::include_graphics(ok_path)
+```
+
+## 6.3 Kriging Method Comparison
+
+```{r kriging-comparison}
+kc_path <- file.path(CONFIG$dir_output, "kriging_comparison.csv")
+if (file.exists(kc_path)) {
+  read_csv(kc_path, show_col_types = FALSE) |> kable(digits = 4)
+}
+```
+
+
+# 7. Discussion
+
+## Key Findings
+
+<!-- Fill in after analysis -->
+
+1. **TROPOMI–ground relationship**: ...
+2. **Most important predictors**: ...
+3. **Spatial non-stationarity**: GW-RF reveals where predictor effects vary
+4. **Hotspot locations**: Persistent clusters in ...
+5. **Kriging improvement**: Regression kriging captures residual spatial structure
+
+## Limitations
+
+- TROPOMI cloud masking reduces usable observations, especially in winter
+- GIOŚ station network is denser in urban areas → potential spatial bias
+- 5 km grid smooths very local gradients (street-level variation lost)
+- Temporal mismatch: satellite overpass (~13:30) vs. 24h ground averages
+
+
+# 8. Conclusion
+
+<!-- Fill in after analysis -->
+
+
+# References
+
+- Copernicus Sentinel-5P (processed by ESA), TROPOMI L2 NO₂ products
+- GIOŚ — Główny Inspektorat Ochrony Środowiska, Państwowy Monitoring Środowiska
+- GUS — Bank Danych Lokalnych (BDL)
+- OpenStreetMap contributors
+
+---
+
+*Spatial Machine Learning in R, WNE UW 2026 — prof. Katarzyna Kopczewska*
+
+```{r session-info}
+sessionInfo()
+```
